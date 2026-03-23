@@ -191,7 +191,8 @@ def get_shader_info(
         event_id: The event ID to inspect the shader at
         stage: The shader stage (vertex, hull, domain, geometry, pixel, compute)
 
-    Returns shader disassembly, constant buffer values, and resource bindings.
+    Returns shader assembly/disassembly text, constant buffer values,
+    and resource bindings.
     """
     return bridge.call("get_shader_info", {"event_id": event_id, "stage": stage})
 
@@ -204,7 +205,7 @@ def get_shader_disassembly(
     max_lines: int = 200,
 ) -> dict:
     """
-    Get shader disassembly with pagination support for handling long shaders.
+    Get shader assembly/disassembly text with pagination support.
 
     Args:
         event_id: The event ID to inspect the shader at
@@ -213,11 +214,15 @@ def get_shader_disassembly(
         max_lines: Maximum number of lines to return (default: 200)
 
     Returns:
-        - content: The disassembly text for the requested line range
+        - content: The assembly/disassembly text for the requested line range
         - start_line: The starting line number returned
         - end_line: The ending line number (exclusive)
-        - total_lines: Total number of lines in the full disassembly
+        - total_lines: Total number of lines in the full assembly/disassembly text
         - has_more: True if there are more lines after end_line
+
+    Note:
+        This returns RenderDoc's shader assembly/disassembly output
+        (for example DXBC/DXIL disassembly), not decompiled HLSL source.
     """
     return bridge.call("get_shader_disassembly", {
         "event_id": event_id, 

@@ -80,7 +80,12 @@ class RenderDocBridge:
 
                     if "error" in response:
                         error = response["error"]
-                        raise RenderDocBridgeError(f"[{error['code']}] {error['message']}")
+                        message = f"[{error['code']}] {error['message']}"
+                        if error["code"] == -32601:
+                            message = self._format_method_not_found_error(
+                                method, error["message"]
+                            )
+                        raise RenderDocBridgeError(message)
 
                     return response.get("result")
 
@@ -95,3 +100,15 @@ class RenderDocBridge:
             raise
         except Exception as e:
             raise RenderDocBridgeError(f"Communication error: {e}")
+
+    def _format_method_not_found_error(self, method: str, original_message: str) -> str:
+        """Provide a more actionable error for extension/server version mismatches."""
+        extension_dir = os.path.join(
+            os.environ.get("APPDATA", ""), "qrenderdoc", "extensions", "renderdoc_mcp_bridge"
+        )
+        return (
+            f"[-32601] {original_message}. "
+            f"This usually means the RenderDoc extension loaded by qrenderdoc is older than "
+            f"the MCP server and does not implement '{method}' yet. "
+            f"Reinstall the extension into '{extension_dir}' and restart RenderDoc."
+        )

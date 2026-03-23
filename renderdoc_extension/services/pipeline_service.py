@@ -430,9 +430,13 @@ class PipelineService:
         return resources
 
     def get_shader_disassembly(self, event_id, stage, start_line=0, max_lines=200):
-        """Get shader disassembly with pagination support"""
+        """Get shader assembly/disassembly text with pagination support"""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
+        if start_line < 0:
+            raise ValueError("start_line must be >= 0")
+        if max_lines <= 0:
+            raise ValueError("max_lines must be > 0")
 
         result = {"disassembly": None, "error": None}
 
@@ -449,7 +453,8 @@ class PipelineService:
 
             reflection = pipe.GetShaderReflection(stage_enum)
 
-            # Get disassembly
+            # RenderDoc returns backend assembly/disassembly text here
+            # (for example DXBC/DXIL disassembly), not decompiled HLSL.
             try:
                 targets = controller.GetDisassemblyTargets(True)
                 if targets:

@@ -133,7 +133,7 @@ class RenderDocFacade:
         return self._pipeline.get_shader_info(event_id, stage)
 
     def get_shader_disassembly(self, event_id, stage, start_line=0, max_lines=200):
-        """Get shader disassembly with pagination support"""
+        """Get shader assembly/disassembly text with pagination support"""
         return self._pipeline.get_shader_disassembly(event_id, stage, start_line, max_lines)
 
     def get_pipeline_state(self, event_id):

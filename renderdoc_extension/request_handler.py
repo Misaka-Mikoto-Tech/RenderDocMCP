@@ -145,8 +145,12 @@ class RequestHandler:
             raise ValueError("event_id is required")
         if stage is None:
             raise ValueError("stage is required")
-        start_line = params.get("start_line", 0)
-        max_lines = params.get("max_lines", 200)
+        start_line = int(params.get("start_line", 0))
+        max_lines = int(params.get("max_lines", 200))
+        if start_line < 0:
+            raise ValueError("start_line must be >= 0")
+        if max_lines <= 0:
+            raise ValueError("max_lines must be > 0")
         return self.facade.get_shader_disassembly(int(event_id), stage, start_line, max_lines)
 
     def _handle_get_buffer_contents(self, params):
