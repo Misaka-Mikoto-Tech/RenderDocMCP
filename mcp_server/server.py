@@ -313,7 +313,10 @@ def open_capture(capture_path: str) -> dict:
 
 def main():
     """Run the MCP server"""
-    mcp.run()
+    # Stdio transports must keep stdout clean for JSON-RPC messages only.
+    # FastMCP's default CLI banner and INFO logs break MCP handshakes in hosts
+    # like Codex/Claude Desktop, so suppress them here.
+    mcp.run(show_banner=False, log_level="ERROR")
 
 
 if __name__ == "__main__":
