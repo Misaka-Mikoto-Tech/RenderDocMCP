@@ -22,6 +22,7 @@ class RequestHandler:
             "get_draw_call_details": self._handle_get_draw_call_details,
             "get_action_timings": self._handle_get_action_timings,
             "get_shader_info": self._handle_get_shader_info,
+            "get_shader_disassembly": self._handle_get_shader_disassembly,
             "get_buffer_contents": self._handle_get_buffer_contents,
             "get_texture_info": self._handle_get_texture_info,
             "get_texture_data": self._handle_get_texture_data,
@@ -135,6 +136,18 @@ class RequestHandler:
         if stage is None:
             raise ValueError("stage is required")
         return self.facade.get_shader_info(int(event_id), stage)
+
+    def _handle_get_shader_disassembly(self, params):
+        """Handle get_shader_disassembly request"""
+        event_id = params.get("event_id")
+        stage = params.get("stage")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        if stage is None:
+            raise ValueError("stage is required")
+        start_line = params.get("start_line", 0)
+        max_lines = params.get("max_lines", 200)
+        return self.facade.get_shader_disassembly(int(event_id), stage, start_line, max_lines)
 
     def _handle_get_buffer_contents(self, params):
         """Handle get_buffer_contents request"""

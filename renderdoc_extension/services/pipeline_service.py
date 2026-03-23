@@ -428,3 +428,52 @@ class PipelineService:
             pass
 
         return resources
+
+    def get_shader_disassembly(self, event_id, stage, start_line=0, max_lines=200):
+        """Get shader disassembly with pagination support"""
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"disassembly": None, "error": None}
+
+        def callback(controller):
+            controller.SetFrameEvent(event_id, True)
+
+            pipe = controller.GetPipelineState()
+            stage_enum = Parsers.parse_stage(stage)
+
+            shader = pipe.GetShader(stage_enum)
+            if shader == rd.ResourceId.Null():
+                result["error"] = "No %s shader bound" % stage
+                return
+
+            reflection = pipe.GetShaderReflection(stage_enum)
+
+            # Get disassembly
+            try:
+                targets = controller.GetDisassemblyTargets(True)
+                if targets:
+                    disasm = controller.DisassembleShader(
+                        pipe.GetGraphicsPipelineObject(), reflection, targets[0]
+                    )
+                    
+                    # Split into lines and paginate
+                    lines = disasm.split('\n')
+                    total_lines = len(lines)
+                    end_line = min(start_line + max_lines, total_lines)
+                    
+                    result["disassembly"] = {
+                        "content": '\n'.join(lines[start_line:end_line]),
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "total_lines": total_lines,
+                        "has_more": end_line < total_lines
+                    }
+            except Exception as e:
+                result["error"] = str(e)
+
+        self._invoke(callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
+        return result["disassembly"]

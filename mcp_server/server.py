@@ -197,6 +197,37 @@ def get_shader_info(
 
 
 @mcp.tool
+def get_shader_disassembly(
+    event_id: int,
+    stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],
+    start_line: int = 0,
+    max_lines: int = 200,
+) -> dict:
+    """
+    Get shader disassembly with pagination support for handling long shaders.
+
+    Args:
+        event_id: The event ID to inspect the shader at
+        stage: The shader stage (vertex, hull, domain, geometry, pixel, compute)
+        start_line: Starting line number (0-based, default: 0)
+        max_lines: Maximum number of lines to return (default: 200)
+
+    Returns:
+        - content: The disassembly text for the requested line range
+        - start_line: The starting line number returned
+        - end_line: The ending line number (exclusive)
+        - total_lines: Total number of lines in the full disassembly
+        - has_more: True if there are more lines after end_line
+    """
+    return bridge.call("get_shader_disassembly", {
+        "event_id": event_id, 
+        "stage": stage,
+        "start_line": start_line,
+        "max_lines": max_lines
+    })
+
+
+@mcp.tool
 def get_buffer_contents(
     resource_id: str,
     offset: int = 0,
