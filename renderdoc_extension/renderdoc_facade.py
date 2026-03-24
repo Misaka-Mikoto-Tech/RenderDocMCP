@@ -98,6 +98,41 @@ class RenderDocFacade:
             exclude_markers=exclude_markers,
         )
 
+    def save_mesh_csv(self, event_id, output_path, mesh_stage="vs_input", instance=0, view=0):
+        """Export the current draw call mesh data to CSV"""
+        return self._action.save_mesh_csv(
+            event_id,
+            output_path,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+        )
+
+    def export_event_assets(
+        self,
+        event_id,
+        output_dir,
+        include_mesh=True,
+        include_textures=True,
+        texture_stages=None,
+        mesh_stage="vs_input",
+        instance=0,
+        view=0,
+        texture_file_format="png",
+    ):
+        """Export a draw call's mesh and textures into a structured asset bundle."""
+        return self._action.export_event_assets(
+            event_id,
+            output_dir,
+            include_mesh=include_mesh,
+            include_textures=include_textures,
+            texture_stages=texture_stages,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+            texture_file_format=texture_file_format,
+        )
+
     # ==================== Search Operations ====================
 
     def find_draws_by_shader(self, shader_name, stage=None):
@@ -125,6 +160,17 @@ class RenderDocFacade:
     def get_texture_data(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
         """Get texture pixel data"""
         return self._resource.get_texture_data(resource_id, mip, slice, sample, depth_slice)
+
+    def save_texture(self, resource_id, output_path, mip=0, slice=0, sample=0, file_format="png"):
+        """Save a texture resource to disk"""
+        return self._resource.save_texture(
+            resource_id,
+            output_path,
+            mip=mip,
+            slice=slice,
+            sample=sample,
+            file_format=file_format,
+        )
 
     # ==================== Pipeline Operations ====================
 

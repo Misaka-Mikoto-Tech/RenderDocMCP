@@ -90,6 +90,7 @@ uv tool update-shell  # PATHに追加
 | `get_buffer_contents` | バッファの内容を取得 (Base64) |
 | `get_texture_info` | テクスチャのメタデータを取得 |
 | `get_texture_data` | テクスチャのピクセルデータを取得 (Base64) |
+| `save_texture` | RenderDoc標準の保存機能でテクスチャを直接ファイル出力 |
 | `get_pipeline_state` | パイプライン状態を取得 |
 
 ## 使用例
@@ -126,6 +127,20 @@ get_texture_data(resource_id="ResourceId::456", slice=3)
 
 # 3Dテクスチャの特定の深度スライスを取得
 get_texture_data(resource_id="ResourceId::789", depth_slice=5)
+```
+
+### テクスチャをファイルに保存
+
+```
+# ディレクトリを指定すると、RenderDoc上のリソース名を使ってPNG保存
+save_texture(resource_id="ResourceId::123", output_path="D:\\exports")
+
+# 出力ファイル名を明示
+save_texture(
+    resource_id="ResourceId::123",
+    output_path="D:\\exports\\albedo.png",
+    file_format="png",
+)
 ```
 
 ### バッファデータの部分取得

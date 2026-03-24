@@ -180,6 +180,89 @@ def get_action_timings(
 
 
 @mcp.tool
+def save_mesh_csv(
+    event_id: int,
+    output_path: str,
+    mesh_stage: Literal["vs_input", "vs_output", "gs_output"] = "vs_input",
+    instance: int = 0,
+    view: int = 0,
+) -> dict:
+    """
+    Export a draw call's mesh data to CSV.
+
+    Args:
+        event_id: The draw call event ID to export
+        output_path: Output file path or destination directory. If a directory is provided,
+                     a filename based on the draw call name and stage will be generated.
+        mesh_stage: Which mesh view to export. Defaults to vs_input.
+                    Use vs_input for Mesh Viewer "VS Input", vs_output for "VS Output",
+                    or gs_output for post-geometry output when available.
+        instance: Instance index to export for instanced draws (default: 0)
+        view: Multiview view index to export (default: 0)
+
+    Returns the final CSV path and export metadata.
+    """
+    return bridge.call(
+        "save_mesh_csv",
+        {
+            "event_id": event_id,
+            "output_path": output_path,
+            "mesh_stage": mesh_stage,
+            "instance": instance,
+            "view": view,
+        },
+    )
+
+
+@mcp.tool
+def export_event_assets(
+    event_id: int,
+    output_dir: str,
+    include_mesh: bool = True,
+    include_textures: bool = True,
+    texture_stages: list[str] | None = None,
+    mesh_stage: Literal["vs_input", "vs_output", "gs_output"] = "vs_input",
+    instance: int = 0,
+    view: int = 0,
+    texture_file_format: Literal["png", "jpg", "jpeg", "hdr", "dds"] = "png",
+) -> dict:
+    """
+    Export a draw call's mesh and texture assets into a structured directory.
+
+    Defaults are tuned for asset reconstruction workflows:
+    - mesh: exports VS Input CSV
+    - textures: exports 2D textures bound to the pixel shader
+    - manifest: writes manifest.json describing exported files
+
+    Args:
+        event_id: The draw call event ID to export
+        output_dir: Destination directory for the exported asset bundle
+        include_mesh: Whether to export mesh CSV (default: True)
+        include_textures: Whether to export bound textures (default: True)
+        texture_stages: Shader stages to scan for textures. Defaults to ["pixel"]
+        mesh_stage: Mesh view to export for CSV. Defaults to vs_input
+        instance: Instance index for instanced draws (default: 0)
+        view: Multiview view index (default: 0)
+        texture_file_format: Output format for textures. Defaults to png
+
+    Returns bundle metadata including manifest path and export counts.
+    """
+    params: dict[str, object] = {
+        "event_id": event_id,
+        "output_dir": output_dir,
+        "include_mesh": include_mesh,
+        "include_textures": include_textures,
+        "mesh_stage": mesh_stage,
+        "instance": instance,
+        "view": view,
+        "texture_file_format": texture_file_format,
+    }
+    if texture_stages is not None:
+        params["texture_stages"] = texture_stages
+    return bridge.call("export_event_assets", params)
+
+
+@mcp.tool
 def get_shader_info(
     event_id: int,
     stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],
@@ -294,6 +377,42 @@ def get_texture_data(
     if depth_slice is not None:
         params["depth_slice"] = depth_slice
     return bridge.call("get_texture_data", params)
+
+
+@mcp.tool
+def save_texture(
+    resource_id: str,
+    output_path: str,
+    mip: int = 0,
+    slice: int = 0,
+    sample: int = 0,
+    file_format: Literal["png", "jpg", "jpeg", "hdr", "dds"] = "png",
+) -> dict:
+    """
+    Save a texture resource directly to disk using RenderDoc's native exporter.
+
+    Args:
+        resource_id: The resource ID of the texture to save
+        output_path: Output file path or destination directory. If a directory is provided,
+                     the texture's RenderDoc resource name will be used as the filename.
+        mip: Mip level to save (default: 0)
+        slice: Array slice or cube face index to save (default: 0)
+        sample: MSAA sample index to save (default: 0)
+        file_format: Output file format. Defaults to png.
+
+    Returns the final saved file path and basic metadata.
+    """
+    return bridge.call(
+        "save_texture",
+        {
+            "resource_id": resource_id,
+            "output_path": output_path,
+            "mip": mip,
+            "slice": slice,
+            "sample": sample,
+            "file_format": file_format,
+        },
+    )
 
 
 @mcp.tool

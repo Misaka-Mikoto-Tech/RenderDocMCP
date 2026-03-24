@@ -21,11 +21,14 @@ class RequestHandler:
             "find_draws_by_resource": self._handle_find_draws_by_resource,
             "get_draw_call_details": self._handle_get_draw_call_details,
             "get_action_timings": self._handle_get_action_timings,
+            "save_mesh_csv": self._handle_save_mesh_csv,
+            "export_event_assets": self._handle_export_event_assets,
             "get_shader_info": self._handle_get_shader_info,
             "get_shader_disassembly": self._handle_get_shader_disassembly,
             "get_buffer_contents": self._handle_get_buffer_contents,
             "get_texture_info": self._handle_get_texture_info,
             "get_texture_data": self._handle_get_texture_data,
+            "save_texture": self._handle_save_texture,
             "get_pipeline_state": self._handle_get_pipeline_state,
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
@@ -127,6 +130,52 @@ class RequestHandler:
             exclude_markers=exclude_markers,
         )
 
+    def _handle_save_mesh_csv(self, params):
+        """Handle save_mesh_csv request"""
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        output_path = params.get("output_path")
+        if output_path is None:
+            raise ValueError("output_path is required")
+        mesh_stage = params.get("mesh_stage", "vs_input")
+        instance = int(params.get("instance", 0))
+        view = int(params.get("view", 0))
+        return self.facade.save_mesh_csv(
+            int(event_id),
+            output_path,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+        )
+
+    def _handle_export_event_assets(self, params):
+        """Handle export_event_assets request"""
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        output_dir = params.get("output_dir")
+        if output_dir is None:
+            raise ValueError("output_dir is required")
+        include_mesh = params.get("include_mesh", True)
+        include_textures = params.get("include_textures", True)
+        texture_stages = params.get("texture_stages")
+        mesh_stage = params.get("mesh_stage", "vs_input")
+        instance = int(params.get("instance", 0))
+        view = int(params.get("view", 0))
+        texture_file_format = params.get("texture_file_format", "png")
+        return self.facade.export_event_assets(
+            int(event_id),
+            output_dir,
+            include_mesh=include_mesh,
+            include_textures=include_textures,
+            texture_stages=texture_stages,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+            texture_file_format=texture_file_format,
+        )
+
     def _handle_get_shader_info(self, params):
         """Handle get_shader_info request"""
         event_id = params.get("event_id")
@@ -179,6 +228,27 @@ class RequestHandler:
         sample = params.get("sample", 0)
         depth_slice = params.get("depth_slice")  # None = full volume
         return self.facade.get_texture_data(resource_id, mip, slice_idx, sample, depth_slice)
+
+    def _handle_save_texture(self, params):
+        """Handle save_texture request"""
+        resource_id = params.get("resource_id")
+        if resource_id is None:
+            raise ValueError("resource_id is required")
+        output_path = params.get("output_path")
+        if output_path is None:
+            raise ValueError("output_path is required")
+        mip = int(params.get("mip", 0))
+        slice_idx = int(params.get("slice", 0))
+        sample = int(params.get("sample", 0))
+        file_format = params.get("file_format", "png")
+        return self.facade.save_texture(
+            resource_id,
+            output_path,
+            mip=mip,
+            slice=slice_idx,
+            sample=sample,
+            file_format=file_format,
+        )
 
     def _handle_get_pipeline_state(self, params):
         """Handle get_pipeline_state request"""

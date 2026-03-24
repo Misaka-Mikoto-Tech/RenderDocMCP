@@ -32,8 +32,18 @@ class RenderDocBridge:
         self.host = host
         self.port = port
         self.timeout = 30.0  # seconds
+        self.method_timeouts = {
+            "save_mesh_csv": 300.0,
+            "save_texture": 120.0,
+            "export_event_assets": 480.0,
+        }
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> Any:
         """Call a method on the RenderDoc extension"""
         # Check if IPC directory exists
         if not os.path.exists(IPC_DIR):
@@ -41,6 +51,10 @@ class RenderDocBridge:
                 f"Cannot connect to RenderDoc MCP Bridge at {self.host}:{self.port}. "
                 "Make sure RenderDoc is running with the MCP Bridge extension loaded."
             )
+
+        effective_timeout = timeout
+        if effective_timeout is None:
+            effective_timeout = self.method_timeouts.get(method, self.timeout)
 
         request = {
             "id": str(uuid.uuid4()),
@@ -90,8 +104,10 @@ class RenderDocBridge:
                     return response.get("result")
 
                 # Check timeout
-                if time.time() - start_time > self.timeout:
-                    raise RenderDocBridgeError("Request timed out")
+                if time.time() - start_time > effective_timeout:
+                    raise RenderDocBridgeError(
+                        f"Request timed out after {effective_timeout:.0f}s"
+                    )
 
                 # Poll interval
                 time.sleep(0.05)
