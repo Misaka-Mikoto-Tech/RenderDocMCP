@@ -814,6 +814,11 @@ class ActionService:
                     "action_name": action_name,
                     "instance": int(instance),
                     "view": int(view),
+                    "unity_import_hints": {
+                        "flip_uv": True,
+                        "rotation_euler": [0.0, 90.0, -90.0],
+                        "preferred_mesh_output_path": None,
+                    },
                     "mesh": None,
                     "textures": [],
                 }
@@ -831,24 +836,14 @@ class ActionService:
                         view=int(view),
                         index_mode="original",
                     )
-                    unity_mesh_export = self._export_mesh_csv_from_current_event(
-                        controller,
-                        action,
-                        structured_file,
-                        mesh_dir,
-                        mesh_stage=mesh_stage,
-                        instance=int(instance),
-                        view=int(view),
-                        index_mode="triangle_soup",
-                    )
                     manifest["mesh"] = {
                         "mesh_stage": mesh_export["mesh_stage"],
                         "topology": mesh_export.get("topology", ""),
                         "row_count": mesh_export["row_count"],
                         "attribute_count": mesh_export["attribute_count"],
                         "output_path": mesh_export["output_path"],
-                        "unity_triangle_soup_output_path": unity_mesh_export["output_path"],
                     }
+                    manifest["unity_import_hints"]["preferred_mesh_output_path"] = mesh_export["output_path"]
 
                 if include_textures:
                     pipe = controller.GetPipelineState()
