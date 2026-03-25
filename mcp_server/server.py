@@ -220,7 +220,7 @@ def export_event_assets(
     output_dir: str,
     include_mesh: bool = True,
     include_textures: bool = True,
-    texture_stages: list[str] | None = None,
+    texture_stages: list[str] | str | None = None,
     mesh_stage: Literal["vs_input", "vs_output", "gs_output"] = "vs_input",
     instance: int = 0,
     view: int = 0,
@@ -228,6 +228,11 @@ def export_event_assets(
 ) -> dict:
     """
     Export a draw call's mesh and texture assets into a structured directory.
+
+    This export runs in the background. Large events commonly take 3-10 minutes.
+    The call returns immediately with a status payload. Poll the returned
+    status_path (export_status.json) until state becomes completed or failed.
+    Completion also produces manifest.json in output_dir.
 
     Defaults are tuned for asset reconstruction workflows:
     - mesh: exports VS Input CSV
@@ -239,7 +244,9 @@ def export_event_assets(
         output_dir: Destination directory for the exported asset bundle
         include_mesh: Whether to export mesh CSV (default: True)
         include_textures: Whether to export bound textures (default: True)
-        texture_stages: Shader stages to scan for textures. Defaults to ["pixel"]
+        texture_stages: Shader stages to scan for textures. Accepts either a
+            list like ["pixel"] or a single string like "pixel". Defaults to
+            ["pixel"].
         mesh_stage: Mesh view to export for CSV. Defaults to vs_input
         instance: Instance index for instanced draws (default: 0)
         view: Multiview view index (default: 0)
@@ -258,7 +265,10 @@ def export_event_assets(
         "texture_file_format": texture_file_format,
     }
     if texture_stages is not None:
-        params["texture_stages"] = texture_stages
+        if isinstance(texture_stages, str):
+            params["texture_stages"] = [texture_stages]
+        else:
+            params["texture_stages"] = texture_stages
     return bridge.call("export_event_assets", params)
 
 

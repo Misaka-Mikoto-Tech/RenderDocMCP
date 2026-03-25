@@ -885,7 +885,11 @@ class ActionService:
 
         export_root = os.path.normpath(output_dir)
         status_path = self._event_asset_status_path(export_root)
-        requested_stages = [str(stage).lower().strip() for stage in (texture_stages or ["pixel"])]
+        if isinstance(texture_stages, str):
+            normalized_texture_stages = [texture_stages]
+        else:
+            normalized_texture_stages = texture_stages or ["pixel"]
+        requested_stages = [str(stage).lower().strip() for stage in normalized_texture_stages]
         job_key = export_root.lower()
 
         def perform_export():
@@ -1103,7 +1107,11 @@ class ActionService:
             view=view,
             texture_file_format=texture_file_format,
             status_path=status_path,
-            message="Export started in background.",
+            message=(
+                "Export started in background. Large events may take 3-10 minutes. "
+                "Poll export_status.json until state becomes completed or failed; "
+                "manifest.json will be written on success."
+            ),
         )
         self._write_event_asset_status(export_root, status)
 
