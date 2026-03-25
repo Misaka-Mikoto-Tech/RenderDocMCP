@@ -7,6 +7,9 @@ import json
 import os
 import re
 import struct
+import threading
+import time
+import traceback
 
 import renderdoc as rd
 
@@ -19,6 +22,8 @@ class ActionService:
     def __init__(self, ctx, invoke_fn):
         self.ctx = ctx
         self._invoke = invoke_fn
+        self._export_jobs = {}
+        self._export_jobs_lock = threading.Lock()
 
     def _sanitize_filename(self, name):
         """Sanitize a name for use as a Windows filename."""
@@ -60,6 +65,95 @@ class ActionService:
         safe_slot = self._sanitize_filename(slot_name) or "texture"
         filename = "%s_%s.%s" % (safe_slot, safe_name, extension)
         return os.path.join(output_dir, filename)
+
+    def _event_asset_status_path(self, output_dir):
+        """Return the status file path for an event asset export."""
+        return os.path.join(os.path.normpath(output_dir), "export_status.json")
+
+    def _write_event_asset_status(self, output_dir, status):
+        """Persist export status so external callers can observe progress."""
+        export_root = os.path.normpath(output_dir)
+        os.makedirs(export_root, exist_ok=True)
+        status_path = self._event_asset_status_path(export_root)
+        with open(status_path, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False, indent=2)
+        return status_path
+
+    def _read_event_asset_status(self, output_dir):
+        """Read the persisted export status if present."""
+        status_path = self._event_asset_status_path(output_dir)
+        if not os.path.exists(status_path):
+            return None
+        with open(status_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _build_completed_status_from_manifest(self, output_dir, fallback_status=None):
+        """Reconstruct a completed status from an existing manifest on disk."""
+        export_root = os.path.normpath(output_dir)
+        manifest_path = os.path.join(export_root, "manifest.json")
+        if not os.path.exists(manifest_path):
+            return None
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        mesh = manifest.get("mesh")
+        textures = manifest.get("textures", [])
+        fallback_status = fallback_status or {}
+        completed_status = self._build_event_asset_status(
+            event_id=manifest.get("event_id", fallback_status.get("event_id", 0)),
+            output_dir=export_root,
+            state="completed",
+            include_mesh=mesh is not None if fallback_status.get("include_mesh") is None else fallback_status.get("include_mesh"),
+            include_textures=bool(textures) if fallback_status.get("include_textures") is None else fallback_status.get("include_textures"),
+            texture_stages=fallback_status.get("texture_stages") or ["pixel"],
+            mesh_stage=(mesh or {}).get("mesh_stage", fallback_status.get("mesh_stage", "vs_input")),
+            instance=manifest.get("instance", fallback_status.get("instance", 0)),
+            view=manifest.get("view", fallback_status.get("view", 0)),
+            texture_file_format=fallback_status.get("texture_file_format", "png"),
+            status_path=self._event_asset_status_path(export_root),
+            message="Export completed (reconciled from manifest).",
+            result={
+                "event_id": int(manifest.get("event_id", fallback_status.get("event_id", 0))),
+                "action_name": manifest.get("action_name", ""),
+                "output_dir": export_root,
+                "manifest_path": manifest_path,
+                "mesh_exported": mesh is not None,
+                "texture_count": len(textures),
+            },
+        )
+        return completed_status
+
+    def _build_event_asset_status(
+        self,
+        event_id,
+        output_dir,
+        state,
+        include_mesh,
+        include_textures,
+        texture_stages,
+        mesh_stage,
+        instance,
+        view,
+        texture_file_format,
+        **extra
+    ):
+        """Build a serializable status payload for background exports."""
+        payload = {
+            "event_id": int(event_id),
+            "output_dir": os.path.normpath(output_dir),
+            "state": state,
+            "include_mesh": bool(include_mesh),
+            "include_textures": bool(include_textures),
+            "texture_stages": list(texture_stages or ["pixel"]),
+            "mesh_stage": str(mesh_stage),
+            "instance": int(instance),
+            "view": int(view),
+            "texture_file_format": str(texture_file_format),
+            "updated_at_epoch": time.time(),
+        }
+        payload.update(extra)
+        return payload
 
     def _make_mesh_attribute(self, **kwargs):
         """Create a mesh attribute descriptor."""
@@ -789,195 +883,282 @@ class ActionService:
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
-        result = {"data": None, "error": None}
+        export_root = os.path.normpath(output_dir)
+        status_path = self._event_asset_status_path(export_root)
+        requested_stages = [str(stage).lower().strip() for stage in (texture_stages or ["pixel"])]
+        job_key = export_root.lower()
 
-        def callback(controller):
-            try:
-                controller.SetFrameEvent(event_id, True)
+        def perform_export():
+            result = {"data": None, "error": None}
 
-                action = self.ctx.GetAction(event_id)
-                if not action:
-                    result["error"] = "No action at event %d" % event_id
-                    return
+            def callback(controller):
+                try:
+                    controller.SetFrameEvent(event_id, True)
 
-                if not (action.flags & rd.ActionFlags.Drawcall):
-                    result["error"] = "Event %d is not a draw call" % event_id
-                    return
+                    action = self.ctx.GetAction(event_id)
+                    if not action:
+                        result["error"] = "No action at event %d" % event_id
+                        return
 
-                structured_file = controller.GetStructuredFile()
-                action_name = action.GetName(structured_file)
-                export_root = os.path.normpath(output_dir)
-                os.makedirs(export_root, exist_ok=True)
+                    if not (action.flags & rd.ActionFlags.Drawcall):
+                        result["error"] = "Event %d is not a draw call" % event_id
+                        return
 
-                manifest = {
-                    "event_id": int(event_id),
-                    "action_name": action_name,
-                    "instance": int(instance),
-                    "view": int(view),
-                    "unity_import_hints": {
-                        "flip_uv": True,
-                        "rotation_euler": [0.0, 90.0, -90.0],
-                        "preferred_mesh_output_path": None,
-                    },
-                    "mesh": None,
-                    "textures": [],
-                }
+                    structured_file = controller.GetStructuredFile()
+                    action_name = action.GetName(structured_file)
+                    os.makedirs(export_root, exist_ok=True)
+                    manifest_path = os.path.join(export_root, "manifest.json")
+                    if os.path.exists(manifest_path):
+                        os.remove(manifest_path)
 
-                if include_mesh:
-                    mesh_dir = os.path.join(export_root, "mesh")
-                    os.makedirs(mesh_dir, exist_ok=True)
-                    mesh_export = self._export_mesh_csv_from_current_event(
-                        controller,
-                        action,
-                        structured_file,
-                        mesh_dir,
-                        mesh_stage=mesh_stage,
-                        instance=int(instance),
-                        view=int(view),
-                        index_mode="original",
-                    )
-                    manifest["mesh"] = {
-                        "mesh_stage": mesh_export["mesh_stage"],
-                        "topology": mesh_export.get("topology", ""),
-                        "row_count": mesh_export["row_count"],
-                        "attribute_count": mesh_export["attribute_count"],
-                        "output_path": mesh_export["output_path"],
-                    }
-                    manifest["unity_import_hints"]["preferred_mesh_output_path"] = mesh_export["output_path"]
-
-                if include_textures:
-                    pipe = controller.GetPipelineState()
-                    textures_dir = os.path.join(export_root, "textures")
-                    os.makedirs(textures_dir, exist_ok=True)
-
-                    requested_stages = texture_stages or ["pixel"]
-                    stage_map = {
-                        "vertex": rd.ShaderStage.Vertex,
-                        "pixel": rd.ShaderStage.Pixel,
-                        "geometry": rd.ShaderStage.Geometry,
-                        "hull": rd.ShaderStage.Hull,
-                        "domain": rd.ShaderStage.Domain,
-                        "compute": rd.ShaderStage.Compute,
+                    manifest = {
+                        "event_id": int(event_id),
+                        "action_name": action_name,
+                        "instance": int(instance),
+                        "view": int(view),
+                        "unity_import_hints": {
+                            "flip_uv": True,
+                            "rotation_euler": [0.0, 90.0, -90.0],
+                            "preferred_mesh_output_path": None,
+                        },
+                        "mesh": None,
+                        "textures": [],
                     }
 
-                    seen_resource_ids = set()
+                    if include_textures:
+                        pipe = controller.GetPipelineState()
+                        textures_dir = os.path.join(export_root, "textures")
+                        os.makedirs(textures_dir, exist_ok=True)
 
-                    for stage_name in requested_stages:
-                        normalized_stage = str(stage_name).lower().strip()
-                        if normalized_stage not in stage_map:
-                            result["error"] = (
-                                "Unsupported texture stage '%s'. Supported values: vertex, pixel, geometry, hull, domain, compute"
-                                % stage_name
-                            )
-                            return
+                        stage_map = {
+                            "vertex": rd.ShaderStage.Vertex,
+                            "pixel": rd.ShaderStage.Pixel,
+                            "geometry": rd.ShaderStage.Geometry,
+                            "hull": rd.ShaderStage.Hull,
+                            "domain": rd.ShaderStage.Domain,
+                            "compute": rd.ShaderStage.Compute,
+                        }
 
-                        stage_enum = stage_map[normalized_stage]
-                        reflection = pipe.GetShaderReflection(stage_enum)
-                        if reflection is None:
-                            continue
+                        seen_resource_ids = set()
 
-                        resources = pipe.GetReadOnlyResources(stage_enum, False)
-                        bind_map = {}
-                        for bind in reflection.readOnlyResources:
-                            bind_map[int(bind.fixedBindNumber)] = bind.name
-
-                        for resource in resources:
-                            descriptor = resource.descriptor
-                            resource_id = descriptor.resource
-                            if resource_id == rd.ResourceId.Null():
-                                continue
-
-                            resource_key = str(resource_id)
-                            if resource_key in seen_resource_ids:
-                                continue
-
-                            tex_desc = None
-                            for tex in controller.GetTextures():
-                                if tex.resourceId == resource_id:
-                                    tex_desc = tex
-                                    break
-                            if tex_desc is None:
-                                continue
-                            if tex_desc.type != rd.TextureType.Texture2D:
-                                continue
-
-                            bind_point = int(resource.access.index)
-                            slot_name = bind_map.get(bind_point, "texture%d" % bind_point)
-                            texture_name = self.ctx.GetResourceName(resource_id)
-                            final_texture_path = self._resolve_texture_output_path(
-                                output_dir=textures_dir,
-                                texture_name=texture_name,
-                                resource_id=resource_id,
-                                slot_name=slot_name,
-                                extension=texture_file_format,
-                            )
-
-                            texsave = rd.TextureSave()
-                            texsave.resourceId = resource_id
-                            texsave.mip = 0
-                            texsave.slice.sliceIndex = 0
-                            if hasattr(texsave, "sample") and hasattr(texsave.sample, "sampleIndex"):
-                                texsave.sample.sampleIndex = 0
-                            elif hasattr(texsave, "sampleIndex"):
-                                texsave.sampleIndex = 0
-                            texsave.alpha = rd.AlphaMapping.Preserve
-                            if texture_file_format == "png":
-                                texsave.destType = rd.FileType.PNG
-                            elif texture_file_format in ("jpg", "jpeg"):
-                                texsave.destType = rd.FileType.JPG
-                            elif texture_file_format == "dds":
-                                texsave.destType = rd.FileType.DDS
-                            elif texture_file_format == "hdr":
-                                texsave.destType = rd.FileType.HDR
-                            else:
+                        for stage_name in requested_stages:
+                            normalized_stage = str(stage_name).lower().strip()
+                            if normalized_stage not in stage_map:
                                 result["error"] = (
-                                    "Unsupported texture_file_format '%s'. Supported values: png, jpg, jpeg, dds, hdr"
-                                    % texture_file_format
+                                    "Unsupported texture stage '%s'. Supported values: vertex, pixel, geometry, hull, domain, compute"
+                                    % stage_name
                                 )
                                 return
 
-                            controller.SaveTexture(texsave, final_texture_path)
-                            if not os.path.exists(final_texture_path):
-                                result["error"] = "RenderDoc did not produce texture file at %s" % final_texture_path
-                                return
+                            stage_enum = stage_map[normalized_stage]
+                            reflection = pipe.GetShaderReflection(stage_enum)
+                            if reflection is None:
+                                continue
 
-                            manifest["textures"].append(
-                                {
-                                    "stage": normalized_stage,
-                                    "slot": bind_point,
-                                    "name": slot_name,
-                                    "resource_id": resource_key,
-                                    "resource_name": texture_name,
-                                    "width": int(tex_desc.width),
-                                    "height": int(tex_desc.height),
-                                    "format": str(tex_desc.format.Name()),
-                                    "output_path": final_texture_path,
-                                }
-                            )
-                            seen_resource_ids.add(resource_key)
+                            resources = pipe.GetReadOnlyResources(stage_enum, False)
+                            bind_map = {}
+                            for bind in reflection.readOnlyResources:
+                                bind_map[int(bind.fixedBindNumber)] = bind.name
 
-                manifest_path = os.path.join(export_root, "manifest.json")
-                with open(manifest_path, "w", encoding="utf-8") as f:
-                    json.dump(manifest, f, ensure_ascii=False, indent=2)
+                            for resource in resources:
+                                descriptor = resource.descriptor
+                                resource_id = descriptor.resource
+                                if resource_id == rd.ResourceId.Null():
+                                    continue
 
-                result["data"] = {
-                    "event_id": int(event_id),
-                    "action_name": action_name,
-                    "output_dir": export_root,
-                    "manifest_path": manifest_path,
-                    "mesh_exported": manifest["mesh"] is not None,
-                    "texture_count": len(manifest["textures"]),
-                }
-            except Exception as e:
-                import traceback
+                                resource_key = str(resource_id)
+                                if resource_key in seen_resource_ids:
+                                    continue
 
-                result["error"] = "Error exporting event assets: %s\n%s" % (
-                    str(e),
-                    traceback.format_exc(),
+                                tex_desc = None
+                                for tex in controller.GetTextures():
+                                    if tex.resourceId == resource_id:
+                                        tex_desc = tex
+                                        break
+                                if tex_desc is None:
+                                    continue
+                                if tex_desc.type != rd.TextureType.Texture2D:
+                                    continue
+
+                                bind_point = int(resource.access.index)
+                                slot_name = bind_map.get(bind_point, "texture%d" % bind_point)
+                                texture_name = self.ctx.GetResourceName(resource_id)
+                                final_texture_path = self._resolve_texture_output_path(
+                                    output_dir=textures_dir,
+                                    texture_name=texture_name,
+                                    resource_id=resource_id,
+                                    slot_name=slot_name,
+                                    extension=texture_file_format,
+                                )
+
+                                texsave = rd.TextureSave()
+                                texsave.resourceId = resource_id
+                                texsave.mip = 0
+                                texsave.slice.sliceIndex = 0
+                                if hasattr(texsave, "sample") and hasattr(texsave.sample, "sampleIndex"):
+                                    texsave.sample.sampleIndex = 0
+                                elif hasattr(texsave, "sampleIndex"):
+                                    texsave.sampleIndex = 0
+                                texsave.alpha = rd.AlphaMapping.Preserve
+                                if texture_file_format == "png":
+                                    texsave.destType = rd.FileType.PNG
+                                elif texture_file_format in ("jpg", "jpeg"):
+                                    texsave.destType = rd.FileType.JPG
+                                elif texture_file_format == "dds":
+                                    texsave.destType = rd.FileType.DDS
+                                elif texture_file_format == "hdr":
+                                    texsave.destType = rd.FileType.HDR
+                                else:
+                                    result["error"] = (
+                                        "Unsupported texture_file_format '%s'. Supported values: png, jpg, jpeg, dds, hdr"
+                                        % texture_file_format
+                                    )
+                                    return
+
+                                controller.SaveTexture(texsave, final_texture_path)
+                                if not os.path.exists(final_texture_path):
+                                    result["error"] = "RenderDoc did not produce texture file at %s" % final_texture_path
+                                    return
+
+                                manifest["textures"].append(
+                                    {
+                                        "stage": normalized_stage,
+                                        "slot": bind_point,
+                                        "name": slot_name,
+                                        "resource_id": resource_key,
+                                        "resource_name": texture_name,
+                                        "width": int(tex_desc.width),
+                                        "height": int(tex_desc.height),
+                                        "format": str(tex_desc.format.Name()),
+                                        "output_path": final_texture_path,
+                                    }
+                                )
+                                seen_resource_ids.add(resource_key)
+
+                    if include_mesh:
+                        mesh_dir = os.path.join(export_root, "mesh")
+                        os.makedirs(mesh_dir, exist_ok=True)
+                        mesh_export = self._export_mesh_csv_from_current_event(
+                            controller,
+                            action,
+                            structured_file,
+                            mesh_dir,
+                            mesh_stage=mesh_stage,
+                            instance=int(instance),
+                            view=int(view),
+                            index_mode="original",
+                        )
+                        manifest["mesh"] = {
+                            "mesh_stage": mesh_export["mesh_stage"],
+                            "topology": mesh_export.get("topology", ""),
+                            "row_count": mesh_export["row_count"],
+                            "attribute_count": mesh_export["attribute_count"],
+                            "output_path": mesh_export["output_path"],
+                        }
+                        manifest["unity_import_hints"]["preferred_mesh_output_path"] = mesh_export["output_path"]
+
+                    with open(manifest_path, "w", encoding="utf-8") as f:
+                        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+                    result["data"] = {
+                        "event_id": int(event_id),
+                        "action_name": action_name,
+                        "output_dir": export_root,
+                        "manifest_path": manifest_path,
+                        "mesh_exported": manifest["mesh"] is not None,
+                        "texture_count": len(manifest["textures"]),
+                    }
+                except Exception as e:
+                    result["error"] = "Error exporting event assets: %s\n%s" % (
+                        str(e),
+                        traceback.format_exc(),
+                    )
+
+            self._invoke(callback)
+
+            if result["error"]:
+                raise ValueError(result["error"])
+            return result["data"]
+
+        existing_status = self._read_event_asset_status(export_root)
+        if existing_status and existing_status.get("state") == "running":
+            reconciled_status = self._build_completed_status_from_manifest(
+                export_root,
+                fallback_status=existing_status,
+            )
+            if reconciled_status is not None:
+                self._write_event_asset_status(export_root, reconciled_status)
+                return reconciled_status
+            return existing_status
+
+        status = self._build_event_asset_status(
+            event_id=event_id,
+            output_dir=export_root,
+            state="running",
+            include_mesh=include_mesh,
+            include_textures=include_textures,
+            texture_stages=requested_stages,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+            texture_file_format=texture_file_format,
+            status_path=status_path,
+            message="Export started in background.",
+        )
+        self._write_event_asset_status(export_root, status)
+
+        def worker():
+            try:
+                data = perform_export()
+                finished_status = self._build_event_asset_status(
+                    event_id=event_id,
+                    output_dir=export_root,
+                    state="completed",
+                    include_mesh=include_mesh,
+                    include_textures=include_textures,
+                    texture_stages=requested_stages,
+                    mesh_stage=mesh_stage,
+                    instance=instance,
+                    view=view,
+                    texture_file_format=texture_file_format,
+                    status_path=status_path,
+                    message="Export completed.",
+                    result=data,
                 )
+                self._write_event_asset_status(export_root, finished_status)
+            except Exception as e:
+                failed_status = self._build_event_asset_status(
+                    event_id=event_id,
+                    output_dir=export_root,
+                    state="failed",
+                    include_mesh=include_mesh,
+                    include_textures=include_textures,
+                    texture_stages=requested_stages,
+                    mesh_stage=mesh_stage,
+                    instance=instance,
+                    view=view,
+                    texture_file_format=texture_file_format,
+                    status_path=status_path,
+                    message="Export failed.",
+                    error=str(e),
+                    traceback=traceback.format_exc(),
+                )
+                self._write_event_asset_status(export_root, failed_status)
+            finally:
+                with self._export_jobs_lock:
+                    self._export_jobs.pop(job_key, None)
 
-        self._invoke(callback)
+        with self._export_jobs_lock:
+            existing_job = self._export_jobs.get(job_key)
+            if existing_job and existing_job.is_alive():
+                return status
 
-        if result["error"]:
-            raise ValueError(result["error"])
-        return result["data"]
+            thread = threading.Thread(
+                target=worker,
+                name="renderdoc_export_event_assets_%d" % int(event_id),
+            )
+            thread.daemon = True
+            self._export_jobs[job_key] = thread
+            thread.start()
+
+        return status
