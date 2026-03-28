@@ -35,13 +35,13 @@ python scripts/install_extension.py
 ### 3. MCPサーバーのインストール
 
 ```bash
-uv tool install
+uv tool install .
 uv tool update-shell  # PATHに追加
 ```
 
 シェルを再起動すると `renderdoc-mcp` コマンドが使えるようになる。
 
-> **Note**: `--editable` を付けると、ソースコードの変更が即座に反映される（開発時に便利）。
+> **Note**: 開発時は `uv tool install --editable .` を使うと、ソースコードの変更が即座に反映される。
 > 安定版としてインストールする場合は `uv tool install .` を使用。
 
 ### 4. MCPクライアントの設定
@@ -87,6 +87,7 @@ uv tool update-shell  # PATHに追加
 | `get_draw_calls` | ドローコール一覧を階層構造で取得 |
 | `get_draw_call_details` | 特定のドローコールの詳細情報を取得 |
 | `get_shader_info` | シェーダーのソースコード・定数バッファの値を取得 |
+| `get_constant_buffer_data` | 特定ステージ/スロットの定数バッファを個別に取得 |
 | `get_buffer_contents` | バッファの内容を取得 (Base64) |
 | `get_texture_info` | テクスチャのメタデータを取得 |
 | `get_texture_data` | テクスチャのピクセルデータを取得 (Base64) |
@@ -105,6 +106,56 @@ get_draw_calls(include_children=true)
 
 ```
 get_shader_info(event_id=123, stage="pixel")
+```
+
+`get_shader_info` の `constant_buffers` には、定数バッファのメタデータに加えて
+`variables` が含まれる。各 cbuffer には以下のような情報が入る:
+
+- `slot`: バインドスロット
+- `size` / `byte_size`: 定数バッファのサイズ
+- `resource_id`: RenderDoc上で解決されたバッファリソース
+- `byte_offset` / `byte_size`: 実際に `GetCBufferVariableContents()` に渡したバッファ範囲
+- `read_mode`: `explicit_resource` または `pipeline_bound`
+- `variables`: 変数名・型・行列/ベクトル形状・値
+
+### 特定の定数バッファを個別に取得
+
+```
+get_constant_buffer_data(event_id=123, stage="vertex", slot=1)
+```
+
+`get_constant_buffer_data` は 1 つの cbuffer だけを返す軽量なツールで、後段の
+アセット書き出しや Unity 向けのマテリアル復元処理に向いている。
+
+返り値には以下が含まれる:
+
+- `name`: cbuffer名
+- `slot`: バインドスロット
+- `resource_id`: 実際に解決されたリソースID
+- `byte_offset`: バッファ読み取り開始位置
+- `byte_size`: バッファ読み取りサイズ
+- `variables`: デコード済みの変数一覧
+
+例:
+
+```json
+{
+  "name": "cbuffer1",
+  "slot": 1,
+  "resource_id": "ResourceId::201",
+  "byte_offset": 0,
+  "byte_size": 65536,
+  "read_mode": "explicit_resource",
+  "variables": [
+    {
+      "name": "cb1_v0",
+      "type": "VarType.Float",
+      "rows": 1,
+      "columns": 4,
+      "value": [2.3643281, 47.286564, 94.57313, 141.8597]
+    }
+  ]
+}
 ```
 
 ### パイプライン状態の取得

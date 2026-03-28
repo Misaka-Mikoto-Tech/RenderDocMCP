@@ -291,6 +291,28 @@ def get_shader_info(
 
 
 @mcp.tool
+def get_constant_buffer_data(
+    event_id: int,
+    stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],
+    slot: int,
+) -> dict:
+    """
+    Get one bound constant buffer's decoded values for a shader stage.
+
+    Args:
+        event_id: The event ID to inspect
+        stage: The shader stage (vertex, hull, domain, geometry, pixel, compute)
+        slot: The constant buffer bind slot to read
+
+    Returns the bound buffer metadata plus decoded variables for that slot.
+    """
+    return bridge.call(
+        "get_constant_buffer_data",
+        {"event_id": event_id, "stage": stage, "slot": slot},
+    )
+
+
+@mcp.tool
 def get_shader_disassembly(
     event_id: int,
     stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"],

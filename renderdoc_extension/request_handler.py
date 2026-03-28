@@ -24,6 +24,7 @@ class RequestHandler:
             "save_mesh_csv": self._handle_save_mesh_csv,
             "export_event_assets": self._handle_export_event_assets,
             "get_shader_info": self._handle_get_shader_info,
+            "get_constant_buffer_data": self._handle_get_constant_buffer_data,
             "get_shader_disassembly": self._handle_get_shader_disassembly,
             "get_buffer_contents": self._handle_get_buffer_contents,
             "get_texture_info": self._handle_get_texture_info,
@@ -185,6 +186,19 @@ class RequestHandler:
         if stage is None:
             raise ValueError("stage is required")
         return self.facade.get_shader_info(int(event_id), stage)
+
+    def _handle_get_constant_buffer_data(self, params):
+        """Handle get_constant_buffer_data request"""
+        event_id = params.get("event_id")
+        stage = params.get("stage")
+        slot = params.get("slot")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        if stage is None:
+            raise ValueError("stage is required")
+        if slot is None:
+            raise ValueError("slot is required")
+        return self.facade.get_constant_buffer_data(int(event_id), stage, int(slot))
 
     def _handle_get_shader_disassembly(self, params):
         """Handle get_shader_disassembly request"""

@@ -178,6 +178,10 @@ class RenderDocFacade:
         """Get shader information for a specific stage"""
         return self._pipeline.get_shader_info(event_id, stage)
 
+    def get_constant_buffer_data(self, event_id, stage, slot):
+        """Get one constant buffer's decoded values"""
+        return self._pipeline.get_constant_buffer_data(event_id, stage, slot)
+
     def get_shader_disassembly(self, event_id, stage, start_line=0, max_lines=200):
         """Get shader assembly/disassembly text with pagination support"""
         return self._pipeline.get_shader_disassembly(event_id, stage, start_line, max_lines)
