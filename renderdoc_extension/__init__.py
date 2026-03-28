@@ -64,12 +64,18 @@ def unregister():
         _server = None
     print("[MCP Bridge] Extension unloaded")
 
-
 def _show_status(ctx, data):
     """Show status dialog"""
+
+    if ctx.IsCaptureLoaded():
+        api_name = ctx.APIProps().pipelineType.name
+        title = f"MCP Bridge Status - {api_name}"
+    else:
+        title = "MCP Bridge Status"
+    
     if _server and _server.is_running():
         ctx.Extensions().MessageDialog(
-            "MCP Bridge is running on port 19876", "MCP Bridge Status"
+            "MCP Bridge is running on port 19876", title
         )
     else:
-        ctx.Extensions().ErrorDialog("MCP Bridge is not running", "MCP Bridge Status")
+        ctx.Extensions().ErrorDialog("MCP Bridge is not running", title)
