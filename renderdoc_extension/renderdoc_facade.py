@@ -99,7 +99,7 @@ class RenderDocFacade:
         )
 
     def save_mesh_csv(self, event_id, output_path, mesh_stage="vs_input", instance=0, view=0):
-        """Export the current draw call mesh data to CSV"""
+        """Export the current draw call mesh data to CSV in the background."""
         return self._action.save_mesh_csv(
             event_id,
             output_path,
@@ -120,7 +120,7 @@ class RenderDocFacade:
         view=0,
         texture_file_format="png",
     ):
-        """Export a draw call's mesh and textures into a structured asset bundle."""
+        """Export a draw call's mesh and textures into a structured asset bundle in the background."""
         return self._action.export_event_assets(
             event_id,
             output_dir,

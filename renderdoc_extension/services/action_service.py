@@ -34,14 +34,19 @@ class ActionService:
         sanitized = sanitized.rstrip(" .")
         return sanitized
 
-    def _resolve_mesh_output_path(self, output_path, action_name, event_id, mesh_stage):
+    def _resolve_mesh_output_path(self, output_path, action_name, event_id, mesh_stage, instance=0, view=0):
         """Resolve the final output path for a saved mesh CSV."""
         safe_name = self._sanitize_filename(action_name)
         if not safe_name:
             safe_name = "event_%d" % event_id
 
         safe_stage = self._sanitize_filename(mesh_stage) or "vs_input"
-        default_filename = "%s_event%d_%s.csv" % (safe_name, event_id, safe_stage)
+        suffix = ""
+        if int(instance) != 0:
+            suffix += "_inst%d" % int(instance)
+        if int(view) != 0:
+            suffix += "_view%d" % int(view)
+        default_filename = "%s_event%d_%s%s.csv" % (safe_name, event_id, safe_stage, suffix)
 
         normalized_path = os.path.normpath(output_path)
         _, ext = os.path.splitext(normalized_path)
@@ -70,22 +75,60 @@ class ActionService:
         """Return the status file path for an event asset export."""
         return os.path.join(os.path.normpath(output_dir), "export_status.json")
 
+    def _mesh_export_status_path(self, output_path, event_id=None, mesh_stage=None, instance=0, view=0):
+        """Return the status file path for a mesh CSV export."""
+        normalized_output = os.path.normpath(output_path)
+        _, ext = os.path.splitext(normalized_output)
+        has_extension = bool(ext)
+
+        if output_path.endswith(("/", "\\")) or os.path.isdir(normalized_output) or not has_extension:
+            output_dir = normalized_output if not has_extension else os.path.dirname(normalized_output)
+            if not output_dir:
+                output_dir = "."
+            suffix = ""
+            if event_id is not None:
+                suffix += "_event%d" % int(event_id)
+            if mesh_stage:
+                suffix += "_%s" % (self._sanitize_filename(mesh_stage) or "vs_input")
+            if int(instance) != 0:
+                suffix += "_inst%d" % int(instance)
+            if int(view) != 0:
+                suffix += "_view%d" % int(view)
+            return os.path.join(output_dir, "mesh_export%s.status.json" % suffix)
+
+        output_dir = os.path.dirname(normalized_output) or "."
+        base_name = os.path.splitext(os.path.basename(normalized_output))[0] or "mesh_export"
+        return os.path.join(output_dir, base_name + ".export_status.json")
+
+    def _write_json_status(self, status_path, status):
+        """Persist a JSON status payload to disk."""
+        normalized_path = os.path.normpath(status_path)
+        status_dir = os.path.dirname(normalized_path)
+        if status_dir:
+            os.makedirs(status_dir, exist_ok=True)
+        with open(normalized_path, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False, indent=2)
+        return normalized_path
+
+    def _read_json_status(self, status_path):
+        """Read a previously persisted JSON status payload."""
+        normalized_path = os.path.normpath(status_path)
+        if not os.path.exists(normalized_path):
+            return None
+        with open(normalized_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
     def _write_event_asset_status(self, output_dir, status):
         """Persist export status so external callers can observe progress."""
         export_root = os.path.normpath(output_dir)
         os.makedirs(export_root, exist_ok=True)
         status_path = self._event_asset_status_path(export_root)
-        with open(status_path, "w", encoding="utf-8") as f:
-            json.dump(status, f, ensure_ascii=False, indent=2)
-        return status_path
+        return self._write_json_status(status_path, status)
 
     def _read_event_asset_status(self, output_dir):
         """Read the persisted export status if present."""
         status_path = self._event_asset_status_path(output_dir)
-        if not os.path.exists(status_path):
-            return None
-        with open(status_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return self._read_json_status(status_path)
 
     def _build_completed_status_from_manifest(self, output_dir, fallback_status=None):
         """Reconstruct a completed status from an existing manifest on disk."""
@@ -154,6 +197,104 @@ class ActionService:
         }
         payload.update(extra)
         return payload
+
+    def _build_mesh_export_status(
+        self,
+        event_id,
+        requested_output_path,
+        final_output_path,
+        mesh_stage,
+        instance,
+        view,
+        state,
+        **extra
+    ):
+        """Build a serializable status payload for background mesh exports."""
+        payload = {
+            "event_id": int(event_id),
+            "requested_output_path": os.path.normpath(requested_output_path),
+            "final_output_path": os.path.normpath(final_output_path),
+            "mesh_stage": str(mesh_stage),
+            "instance": int(instance),
+            "view": int(view),
+            "state": state,
+            "updated_at_epoch": time.time(),
+        }
+        payload.update(extra)
+        return payload
+
+    def _prepare_mesh_export(self, event_id, output_path, mesh_stage, instance=0, view=0):
+        """Validate a mesh export request and resolve its final output path."""
+        result = {"data": None, "error": None}
+
+        def callback(controller):
+            try:
+                controller.SetFrameEvent(event_id, True)
+
+                action = self.ctx.GetAction(event_id)
+                if not action:
+                    result["error"] = "No action at event %d" % event_id
+                    return
+
+                if not (action.flags & rd.ActionFlags.Drawcall):
+                    result["error"] = "Event %d is not a draw call" % event_id
+                    return
+
+                structured_file = controller.GetStructuredFile()
+                action_name = action.GetName(structured_file)
+                final_output_path = self._resolve_mesh_output_path(
+                    output_path,
+                    action_name,
+                    int(event_id),
+                    mesh_stage,
+                    instance=int(instance),
+                    view=int(view),
+                )
+                result["data"] = {
+                    "action_name": action_name,
+                    "final_output_path": os.path.normpath(final_output_path),
+                }
+            except Exception as e:
+                result["error"] = "Error preparing mesh CSV export: %s\n%s" % (
+                    str(e),
+                    traceback.format_exc(),
+                )
+
+        self._invoke(callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
+        return result["data"]
+
+    def _build_completed_mesh_status_from_file(self, status_path, fallback_status=None):
+        """Reconstruct a completed mesh export status if the CSV already exists."""
+        fallback_status = fallback_status or {}
+        final_output_path = fallback_status.get("final_output_path")
+        if not final_output_path:
+            return None
+        normalized_output = os.path.normpath(final_output_path)
+        if not os.path.exists(normalized_output):
+            return None
+
+        completed_status = self._build_mesh_export_status(
+            event_id=fallback_status.get("event_id", 0),
+            requested_output_path=fallback_status.get("requested_output_path", normalized_output),
+            final_output_path=normalized_output,
+            mesh_stage=fallback_status.get("mesh_stage", "vs_input"),
+            instance=fallback_status.get("instance", 0),
+            view=fallback_status.get("view", 0),
+            state="completed",
+            status_path=os.path.normpath(status_path),
+            message="Mesh export completed (reconciled from existing CSV).",
+            result={
+                "event_id": int(fallback_status.get("event_id", 0)),
+                "output_path": normalized_output,
+                "mesh_stage": fallback_status.get("mesh_stage", "vs_input"),
+                "instance": int(fallback_status.get("instance", 0)),
+                "view": int(fallback_status.get("view", 0)),
+            },
+        )
+        return completed_status
 
     def _make_mesh_attribute(self, **kwargs):
         """Create a mesh attribute descriptor."""
@@ -825,47 +966,141 @@ class ActionService:
         return result["data"]
 
     def save_mesh_csv(self, event_id, output_path, mesh_stage="vs_input", instance=0, view=0):
-        """Export the current draw call mesh data to CSV."""
+        """Export the current draw call mesh data to CSV in the background."""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
-        result = {"data": None, "error": None}
+        status_path = self._mesh_export_status_path(
+            output_path,
+            event_id=event_id,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+        )
+        job_key = os.path.normcase(status_path)
 
-        def callback(controller):
+        existing_status = self._read_json_status(status_path)
+        if existing_status and existing_status.get("state") == "running":
+            reconciled_status = self._build_completed_mesh_status_from_file(
+                status_path,
+                fallback_status=existing_status,
+            )
+            if reconciled_status is not None:
+                self._write_json_status(status_path, reconciled_status)
+                return reconciled_status
+            with self._export_jobs_lock:
+                existing_job = self._export_jobs.get(job_key)
+            if existing_job and existing_job.is_alive():
+                return existing_status
+
+        preparation = self._prepare_mesh_export(
+            event_id,
+            output_path,
+            mesh_stage,
+            instance=instance,
+            view=view,
+        )
+        final_output_path = preparation["final_output_path"]
+
+        status = self._build_mesh_export_status(
+            event_id=event_id,
+            requested_output_path=output_path,
+            final_output_path=final_output_path,
+            mesh_stage=mesh_stage,
+            instance=instance,
+            view=view,
+            state="running",
+            status_path=status_path,
+            message=(
+                "Mesh export started in background. Large meshes can take minutes. "
+                "Poll the returned status_path until state becomes completed or failed."
+            ),
+        )
+        self._write_json_status(status_path, status)
+
+        def worker():
+            result = {"data": None, "error": None}
+
+            def callback(controller):
+                try:
+                    controller.SetFrameEvent(event_id, True)
+
+                    action = self.ctx.GetAction(event_id)
+                    if not action:
+                        result["error"] = "No action at event %d" % event_id
+                        return
+
+                    if not (action.flags & rd.ActionFlags.Drawcall):
+                        result["error"] = "Event %d is not a draw call" % event_id
+                        return
+
+                    structured_file = controller.GetStructuredFile()
+                    result["data"] = self._export_mesh_csv_from_current_event(
+                        controller,
+                        action,
+                        structured_file,
+                        output_path,
+                        mesh_stage=mesh_stage,
+                        instance=int(instance),
+                        view=int(view),
+                    )
+                except Exception as e:
+                    result["error"] = "Error saving mesh CSV: %s\n%s" % (
+                        str(e),
+                        traceback.format_exc(),
+                    )
+
             try:
-                controller.SetFrameEvent(event_id, True)
+                self._invoke(callback)
+                if result["error"]:
+                    raise ValueError(result["error"])
 
-                action = self.ctx.GetAction(event_id)
-                if not action:
-                    result["error"] = "No action at event %d" % event_id
-                    return
-
-                if not (action.flags & rd.ActionFlags.Drawcall):
-                    result["error"] = "Event %d is not a draw call" % event_id
-                    return
-                structured_file = controller.GetStructuredFile()
-                result["data"] = self._export_mesh_csv_from_current_event(
-                    controller,
-                    action,
-                    structured_file,
-                    output_path,
+                finished_status = self._build_mesh_export_status(
+                    event_id=event_id,
+                    requested_output_path=output_path,
+                    final_output_path=result["data"]["output_path"],
                     mesh_stage=mesh_stage,
-                    instance=int(instance),
-                    view=int(view),
+                    instance=instance,
+                    view=view,
+                    state="completed",
+                    status_path=status_path,
+                    message="Mesh export completed.",
+                    result=result["data"],
                 )
+                self._write_json_status(status_path, finished_status)
             except Exception as e:
-                import traceback
-
-                result["error"] = "Error saving mesh CSV: %s\n%s" % (
-                    str(e),
-                    traceback.format_exc(),
+                failed_status = self._build_mesh_export_status(
+                    event_id=event_id,
+                    requested_output_path=output_path,
+                    final_output_path=final_output_path,
+                    mesh_stage=mesh_stage,
+                    instance=instance,
+                    view=view,
+                    state="failed",
+                    status_path=status_path,
+                    message="Mesh export failed.",
+                    error=str(e),
+                    traceback=traceback.format_exc(),
                 )
+                self._write_json_status(status_path, failed_status)
+            finally:
+                with self._export_jobs_lock:
+                    self._export_jobs.pop(job_key, None)
 
-        self._invoke(callback)
+        with self._export_jobs_lock:
+            existing_job = self._export_jobs.get(job_key)
+            if existing_job and existing_job.is_alive():
+                return status
 
-        if result["error"]:
-            raise ValueError(result["error"])
-        return result["data"]
+            thread = threading.Thread(
+                target=worker,
+                name="renderdoc_save_mesh_csv_%d" % int(event_id),
+            )
+            thread.daemon = True
+            self._export_jobs[job_key] = thread
+            thread.start()
+
+        return status
 
     def export_event_assets(
         self,

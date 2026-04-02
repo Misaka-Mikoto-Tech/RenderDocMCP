@@ -91,6 +91,8 @@ uv tool update-shell  # PATHに追加
 | `get_buffer_contents` | バッファの内容を取得 (Base64) |
 | `get_texture_info` | テクスチャのメタデータを取得 |
 | `get_texture_data` | テクスチャのピクセルデータを取得 (Base64) |
+| `save_mesh_csv` | メッシュCSVをバックグラウンドで出力。即時にstatus payloadを返し、`status_path` をポーリングして完了を確認 |
+| `export_event_assets` | mesh + textures をバックグラウンドで一括出力。出力先の `export_status.json` をポーリングして進捗確認 |
 | `save_texture` | RenderDoc標準の保存機能でテクスチャを直接ファイル出力 |
 | `get_pipeline_state` | パイプライン状態を取得 |
 
@@ -162,6 +164,53 @@ get_constant_buffer_data(event_id=123, stage="vertex", slot=1)
 
 ```
 get_pipeline_state(event_id=123)
+```
+
+### メッシュCSVのバックグラウンド出力
+
+`save_mesh_csv` は即時に status payload を返し、実際の CSV 書き出しは
+バックグラウンドで実行されます。返却された `status_path` をポーリングして
+`state` が `completed` または `failed` になるまで確認してください。
+
+```python
+save_mesh_csv(
+    event_id=6918,
+    output_path="D:\\exports\\mesh_async_test",
+    mesh_stage="vs_input",
+    instance=0,
+    view=0,
+)
+```
+
+返り値の例:
+
+```json
+{
+  "state": "running",
+  "status_path": "D:\\exports\\mesh_async_test\\mesh_export_event6918_vs_input.status.json",
+  "final_output_path": "D:\\exports\\mesh_async_test\\DrawIndexed_event6918_vs_input.csv"
+}
+```
+
+補足:
+
+- statusファイル名は `event_id` / `mesh_stage` / `instance` / `view` を含みます
+- 同一ジョブの再呼び出し時は重複実行せず、現在の状態を返します
+- `export_event_assets` の `export_status.json` とは別ファイルです
+
+### アセットバンドルのバックグラウンド出力
+
+`export_event_assets` もバックグラウンド実行です。出力先ディレクトリ内の
+`export_status.json` をポーリングして完了を確認してください。成功時には
+`manifest.json` も生成されます。
+
+```python
+export_event_assets(
+    event_id=6918,
+    output_dir="D:\\exports\\event_6918_bundle",
+    include_mesh=True,
+    include_textures=True,
+)
 ```
 
 ### テクスチャデータの取得

@@ -190,6 +190,10 @@ def save_mesh_csv(
     """
     Export a draw call's mesh data to CSV.
 
+    This export runs in the background. Large meshes can take several minutes.
+    The call returns immediately with a status payload. Poll the returned
+    status_path until state becomes completed or failed.
+
     Args:
         event_id: The draw call event ID to export
         output_path: Output file path or destination directory. If a directory is provided,
@@ -200,7 +204,7 @@ def save_mesh_csv(
         instance: Instance index to export for instanced draws (default: 0)
         view: Multiview view index to export (default: 0)
 
-    Returns the final CSV path and export metadata.
+    Returns a status payload including the eventual CSV output path.
     """
     return bridge.call(
         "save_mesh_csv",
