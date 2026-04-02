@@ -203,6 +203,14 @@ class PipelineService:
             except Exception:
                 pass
 
+            # Rasterizer state
+            try:
+                rasterizer = self._get_rasterizer_state(controller, pipe)
+                if rasterizer:
+                    pipeline_info["rasterizer"] = rasterizer
+            except Exception:
+                pass
+
             result["pipeline"] = pipeline_info
 
         self._invoke(callback)
@@ -776,6 +784,163 @@ class PipelineService:
             pass
 
         return resources
+
+    def _get_rasterizer_state(self, controller, pipe):
+        """Get rasterizer state across generic and API-specific pipeline objects."""
+        api_specific_candidates = []
+
+        for getter in (
+            lambda: controller.GetD3D11PipelineState(),
+            lambda: self.ctx.CurD3D11PipelineState(),
+            lambda: controller.GetD3D12PipelineState(),
+            lambda: self.ctx.CurD3D12PipelineState(),
+            lambda: controller.GetGLPipelineState(),
+            lambda: self.ctx.CurGLPipelineState(),
+            lambda: controller.GetVulkanPipelineState(),
+            lambda: self.ctx.CurVulkanPipelineState(),
+        ):
+            try:
+                api_specific_candidates.append(getter())
+            except Exception:
+                pass
+
+        for pipe_state in api_specific_candidates:
+            serialized = self._serialize_api_rasterizer_state(pipe_state)
+            if serialized:
+                return serialized
+
+        return {}
+
+    def _serialize_api_rasterizer_state(self, pipe_state):
+        """Resolve an API-specific rasterizer state object and serialize it."""
+        if not pipe_state:
+            return {}
+
+        for attr_name in (
+            "rasterizer",
+            "rasterizerState",
+            "rasterizerDesc",
+            "rast",
+            "rastState",
+        ):
+            try:
+                candidate = getattr(pipe_state, attr_name)
+            except Exception:
+                continue
+
+            serialized = self._serialize_rasterizer_state(candidate)
+            if serialized:
+                return serialized
+
+        return {}
+
+    def _serialize_rasterizer_state(self, rasterizer):
+        """Serialize a rasterizer state object using best-effort field discovery."""
+        if not rasterizer:
+            return {}
+
+        wrapper = rasterizer
+
+        if hasattr(rasterizer, "state"):
+            try:
+                rasterizer = rasterizer.state
+            except Exception:
+                rasterizer = wrapper
+
+        if hasattr(rasterizer, "descriptor"):
+            try:
+                rasterizer = rasterizer.descriptor
+            except Exception:
+                pass
+
+        serialized = {}
+
+        wrapper_field_map = {
+            "sample_mask": ("sampleMask",),
+            "sample_coverage": ("sampleCoverage",),
+            "sample_coverage_invert": ("sampleCoverageInvert",),
+            "sample_coverage_value": ("sampleCoverageValue",),
+            "sample_mask_value": ("sampleMaskValue",),
+        }
+
+        for public_name, candidate_names in wrapper_field_map.items():
+            value = self._get_first_attr(wrapper, candidate_names)
+            if value is None:
+                continue
+            serialized[public_name] = self._serialize_simple_value(value)
+
+        field_map = {
+            "resource_id": ("resourceId",),
+            "fill_mode": ("fillMode", "fillmode"),
+            "cull_mode": ("cullMode", "cullmode"),
+            "front_ccw": ("frontCCW", "frontCCW", "frontCounterClockwise"),
+            "depth_bias": ("depthBias",),
+            "depth_bias_clamp": ("depthBiasClamp",),
+            "slope_scaled_depth_bias": ("slopeScaledDepthBias",),
+            "depth_clip": ("depthClip", "depthClipEnable"),
+            "scissor_enable": ("scissorEnable",),
+            "multisample_enable": ("multisampleEnable",),
+            "antialiased_lines": ("antialiasedLines", "antialiasedLineEnable"),
+            "forced_sample_count": ("forcedSampleCount",),
+            "conservative_rasterization": (
+                "conservativeRasterization",
+                "conservativeRaster",
+            ),
+            "line_raster_mode": ("lineRasterMode",),
+            "base_shading_rate": ("baseShadingRate",),
+            "pipeline_shading_rate": ("pipelineShadingRate",),
+            "shading_rate_combiners": ("shadingRateCombiners",),
+            "shading_rate_image": ("shadingRateImage",),
+            "depth_clamp": ("depthClamp", "depthClampEnable"),
+            "depth_clip_enable": ("depthClipEnable",),
+            "depth_bias_enable": ("depthBiasEnable",),
+            "rasterizer_discard_enable": ("rasterizerDiscardEnable",),
+            "line_width": ("lineWidth",),
+            "line_stipple_factor": ("lineStippleFactor",),
+            "line_stipple_pattern": ("lineStipplePattern",),
+            "provoking_vertex_first": ("provokingVertexFirst",),
+            "extra_primitive_overestimation_size": ("extraPrimitiveOverestimationSize",),
+            "alpha_to_coverage": ("alphaToCoverage",),
+            "alpha_to_one": ("alphaToOne",),
+            "min_sample_shading_rate": ("minSampleShadingRate",),
+            "point_fade_threshold": ("pointFadeThreshold",),
+            "point_origin_upper_left": ("pointOriginUpperLeft",),
+            "point_size": ("pointSize",),
+            "programmable_point_size": ("programmablePointSize",),
+        }
+
+        for public_name, candidate_names in field_map.items():
+            value = self._get_first_attr(rasterizer, candidate_names)
+            if value is None:
+                continue
+            serialized[public_name] = self._serialize_simple_value(value)
+
+        return serialized
+
+    def _get_first_attr(self, obj, names):
+        """Return the first available attribute value from a list of names."""
+        for name in names:
+            try:
+                return getattr(obj, name)
+            except Exception:
+                continue
+        return None
+
+    def _serialize_simple_value(self, value):
+        """Serialize scalar-ish RenderDoc values into JSON-friendly primitives."""
+        if not isinstance(value, bool) and hasattr(value, "name"):
+            try:
+                return value.name
+            except Exception:
+                pass
+        if isinstance(value, (bool, int, float, str)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [self._serialize_simple_value(v) for v in value]
+        try:
+            return str(value)
+        except Exception:
+            return repr(value)
 
     def get_shader_disassembly(self, event_id, stage, start_line=0, max_lines=200):
         """Get shader assembly/disassembly text with pagination support"""

@@ -461,6 +461,7 @@ def get_pipeline_state(event_id: int) -> dict:
     - UAVs (RWTextures/RWBuffers): resource details with dimensions and format
     - Samplers: addressing modes, filter settings, LOD parameters
     - Constant buffers: slot, size, variable count
+    - Rasterizer state: fill/cull mode, front face winding, depth bias, and D3D12 extras
     - Render targets and depth target
     - Viewports and input assembly state
     """
